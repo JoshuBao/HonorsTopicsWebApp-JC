@@ -1,92 +1,182 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<title>My Super Epic Game</title>
+	<title>AI Outfit Recommender</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<style>
-		canvas {
-			border: 1px solid black;
+		body {
+			font-family: Arial, sans-serif;
+			margin: 0;
+			padding: 0;
+		}
+		h1, h2, h3, h4, h5, h6 {
+			margin: 0;
+		}
+		header {
+			background-color: #222;
+			color: #fff;
+			padding: 1em;
+			text-align: center;
+		}
+		main {
+			display: flex;
+			flex-wrap: wrap;
+			justify-content: center;
+			padding: 1em;
+		}
+		label {
+			display: block;
+			margin: 1em;
+		}
+		input[type="range"] {
+			display: block;
+			width: 100%;
+		}
+		.item {
+			background-color: #fff;
+			border: 1px solid #ccc;
+			border-radius: 0.5em;
+			box-shadow: 0 0 0.5em #ccc;
+			margin: 1em;
+			padding: 1em;
+			text-align: center;
+			width: 200px;
 		}
 	</style>
 </head>
 <body>
-	<h1>Welcome to My Super Epic Game!</h1>
-	<p>Use the arrow keys to move the player and collect the coins.</p>
-	<canvas id="canvas" width="400" height="400"></canvas>
+	<header>
+		<h1>AI Outfit Recommender</h1>
+		<h2>Find the perfect outfit for any weather</h2>
+	</header>
+	<main>
+		<label>
+			Temperature: <span id="temperature-label">0&deg;C</span>
+			<input type="range" id="temperature" min="-30" max="40" step="1" value="0">
+		</label>
+		<label>
+			Humidity: <span id="humidity-label">50%</span>
+			<input type="range" id="humidity" min="0" max="100" step="1" value="50">
+		</label>
+		<label>
+			Wind speed: <span id="windSpeed-label">0 m/s</span>
+			<input type="range" id="windSpeed" min="0" max="10" step="1" value="0">
+		</label>
+		<label>
+			Upload images of your wardrobe:
+			<input type="file" id="wardrobe" accept="image/*" multiple>
+		</label>
+		<div id="outfit"></div>
+	</main>
+	<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.10.0/dist/tf.min.js"></script>
 	<script>
-		// Game code starts here
+		async function predictOutfit() {
+			const temperature = document.getElementById('temperature').value;
+			const humidity = document.getElementById('humidity').value;
+			const windSpeed = document.getElementById('windSpeed').value;
+			const wardrobe = document.getElementById('wardrobe').files;
 
-		// Set up the canvas
-		const canvas = document.getElementById('canvas');
-		const ctx = canvas.getContext('2d');
-
-		// Set up the player and coins
-		let player = {
-			x: canvas.width/2,
-			y: canvas.height/2,
-			width: 20,
-			height: 20,
-			speed: 5
-		};
-		let coins = [];
-		for (let i = 0; i < 10; i++) {
-			coins.push({
-				x: Math.random() * canvas.width,
-				y: Math.random() * canvas.height,
-				radius: 10
-			});
-		}
-
-		// Draw the player and coins on the canvas
-		function draw() {
-			ctx.clearRect(0, 0, canvas.width, canvas.height);
-			ctx.fillStyle = 'blue';
-			ctx.fillRect(player.x, player.y, player.width, player.height);
-			ctx.fillStyle = 'yellow';
-			coins.forEach(coin => {
-				ctx.beginPath();
-				ctx.arc(coin.x, coin.y, coin.radius, 0, 2*Math.PI);
-				ctx.fill();
-			});
-		}
-
-		// Move the player when the arrow keys are pressed
-		document.addEventListener('keydown', event => {
-			if (event.code === 'ArrowUp') {
-				player.y -= player.speed;
-			} else if (event.code === 'ArrowDown') {
-				player.y += player.speed;
-			} else if (event.code === 'ArrowLeft') {
-				player.x -= player.speed;
-			} else if (event.code === 'ArrowRight') {
-				player.x += player.speed;
+			if (!wardrobe.length) {
+				alert('Please select at least one image for your wardrobe.');
+				return;
 			}
-		});
 
-		// Check if the player has collected a coin
-		function checkCollisions() {
-			coins.forEach((coin, index) => {
-				const distance = Math.sqrt((player.x - coin.x)**2 + (player.y - coin.y)**2);
-				if (distance < player.width/2 + coin.radius) {
-					coins.splice(index, 1);
-				}
-			});
-		}
+			// Pre-process the wardrobe images
+			const images = await Promise.all(Array.from(wardrobe).map(async (file) => {
+				const image = new Image();
+				const reader = new FileReader();
+				reader.readAsDataURL(file);
+				await new Promise((resolve) => {
+					reader.onload = () => {
+						image.onload = resolve;
+						image.src = reader.result;
+					};
+				});
+				const tensor = tf.browser.fromPixels(image);
+        const resizedTensor = tf.image.resizeBilinear(tensor, [224, 224]);
+			const normalizedTensor = resizedTensor.toFloat().div(tf.scalar(255)).expandDims();
+			return normalizedTensor;
+		}));
 
-		// Game loop
-		function gameLoop() {
-			draw();
-			checkCollisions();
-			if (coins.length === 0) {
-				alert('You win!');
+		// Load the pre-trained MobileNet model
+		const model = await tf.loadGraphModel('https://tfhub.dev/google/tfjs-model/imagenet/mobilenet_v2_100_224/feature_vector/5/default/1', { fromTFHub: true });
+
+		// Generate the outfit recommendation
+		const inputs = tf.concat(images, 0);
+		const { logits } = model.predict(inputs);
+		const probabilities = tf.softmax(logits);
+		const topK = tf.topk(probabilities, 10);
+		const indices = Array.from(await topK.indices.data());
+		const recommendations = indices.map((i) => {
+			const probability = probabilities.dataSync()[i];
+			return { label: imagenetClasses[i], probability };
+		}).filter((recommendation) => recommendation.label in wardrobeLabels);
+
+		// Display the outfit recommendation
+		const outfitDiv = document.getElementById('outfit');
+		outfitDiv.innerHTML = '';
+		if (recommendations.length) {
+			const recommendation = recommendations[0];
+			const { label } = recommendation;
+			const itemDiv = document.createElement('div');
+			itemDiv.classList.add('item');
+			const image = wardrobeImages[label];
+			if (image) {
+				const img = document.createElement('img');
+				img.src = image;
+				img.alt = label;
+				itemDiv.appendChild(img);
 			} else {
-				requestAnimationFrame(gameLoop);
+				itemDiv.textContent = label;
 			}
+			outfitDiv.appendChild(itemDiv);
+		} else {
+			outfitDiv.textContent = 'No outfit recommendation.';
 		}
+	}
 
-		// Start the game loop
-		gameLoop();
-
-		// Game code ends here
-	</script>
+	const wardrobeImages = {};
+	const wardrobeLabels = {};
+	const imagenetClasses = await (await fetch('https://storage.googleapis.com/tfjs-models/tfjs/mobilenet_v2_1.0_224_imagenet_classes.json')).json();
+	document.getElementById('temperature').addEventListener('input', () => {
+		document.getElementById('temperature-label').textContent = `${document.getElementById('temperature').value}&deg;C`;
+		predictOutfit();
+	});
+	document.getElementById('humidity').addEventListener('input', () => {
+		document.getElementById('humidity-label').textContent = `${document.getElementById('humidity').value}%`;
+		predictOutfit();
+	});
+	document.getElementById('windSpeed').addEventListener('input', () => {
+		document.getElementById('windSpeed-label').textContent = `${document.getElementById('windSpeed').value} m/s`;
+		predictOutfit();
+	});
+	document.getElementById('wardrobe').addEventListener('change', async () => {
+		const files = document.getElementById('wardrobe').files;
+		wardrobeImages = {};
+		wardrobeLabels = {};
+		for (const file of files) {
+			const reader = new FileReader();
+			reader.readAsDataURL(file);
+			await new Promise((resolve) => {
+				reader.onload = () => {
+					const image = new Image();
+					image.onload = () => {
+						const tensor = tf.browser.fromPixels(image);
+						const resizedTensor = tf.image.resizeBilinear(tensor, [224, 224]);
+						const normalizedTensor = resizedTensor.toFloat().div(tf.scalar(255)).expandDims();
+						const { values } = tf.topk(model.predict(normalizedTensor), 1);
+						const label = imagenetClasses[values.dataSync()[0]];
+						wardrobeImages[label] = reader.result;
+						wardrobeLabels[label] = true;
+						resolve();
+					};
+					image.src = reader.result;
+				};
+			});
+		}
+		predictOutfit();
+	});
+</script>
 </body>
 </html>
